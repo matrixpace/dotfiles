@@ -52,6 +52,35 @@ append_once() {
   printf '%s\n' "$block" >>"$file"
 }
 
+prepend_once() {
+  local file="$1" marker="$2" block="$3"
+  [[ -f "$file" ]] || return 0
+  grep -Fq "$marker" "$file" && return 0
+  local tmp
+  tmp="$(mktemp)"
+  {
+    printf '%s\n' "$block"
+    cat "$file"
+  } >"$tmp"
+  mv "$tmp" "$file"
+}
+
+# Inserts a multi-line block before the first line exactly matching $match (OMZ: source $ZSH/oh-my-zsh.sh).
+insert_once_before_line() {
+  local file="$1" marker="$2" match="$3" block="$4"
+  [[ -f "$file" ]] || return 0
+  grep -Fq "$marker" "$file" && return 0
+  grep -qF "$match" "$file" || return 0
+  local tmp ln
+  ln="$(grep -nF "$match" "$file" | head -1 | cut -d: -f1)" || return 0
+  [[ -n "$ln" ]] || return 0
+  tmp="$(mktemp)"
+  head -n "$((ln - 1))" "$file" >"$tmp"
+  printf '%s\n' "$block" >>"$tmp"
+  tail -n "+${ln}" "$file" >>"$tmp"
+  mv "$tmp" "$file"
+}
+
 install_packages() {
   log "APT packages..."
   run_sudo apt-get update -qq
@@ -164,6 +193,13 @@ install_fzf() {
   ok "fzf"
 }
 
+append_fzf_zshrc() {
+  local z="$HOME/.zshrc"
+  [[ -f "$z" ]] || return 0
+  append_once "$z" '[dot-install fzf]' '# [dot-install fzf]
+[[ -f ~/.fzf.zsh ]] && source ~/.fzf.zsh'
+}
+
 sync_ohmyzsh_zshrc() {
   local z="$HOME/.zshrc"
   [[ -f "$z" ]] || return 0
@@ -171,12 +207,43 @@ sync_ohmyzsh_zshrc() {
     && sed -i 's/^[[:space:]]*ZSH_THEME=.*/ZSH_THEME="powerlevel10k\/powerlevel10k"/' "$z" \
     || printf '%s\n' 'ZSH_THEME="powerlevel10k/powerlevel10k"' >>"$z"
   grep -qE '^[[:space:]]*plugins=\(' "$z" \
-    && sed -i 's/^[[:space:]]*plugins=(.*)/plugins=(git autojump zsh-autosuggestions zsh-syntax-highlighting)/' "$z" \
-    || printf '%s\n' 'plugins=(git autojump zsh-autosuggestions zsh-syntax-highlighting)' >>"$z"
+    && sed -i 's/^[[:space:]]*plugins=(.*)/plugins=(git autojump zsh-autosuggestions tmux zsh-syntax-highlighting)/' "$z" \
+    || printf '%s\n' 'plugins=(git autojump zsh-autosuggestions tmux zsh-syntax-highlighting)' >>"$z"
+}
+
+prepend_p10k_instant_prompt() {
+  local z="$HOME/.zshrc"
+  [[ -f "$z" ]] || return 0
+  prepend_once "$z" '[dot-install p10k-instant]' '# [dot-install p10k-instant]
+# Enable Powerlevel10k instant prompt. Should stay close to the top of ~/.zshrc.
+# Initialization code that may require console input (password prompts, [y/n]
+# confirmations, etc.) must go above this block; everything else may go below.
+if [[ -r "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh" ]]; then
+  source "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh"
+fi'
 }
 
 append_auto_tmux() {
-  append_once "$HOME/.zshrc" '[dot-install auto-tmux]' '# [dot-install auto-tmux] '
+  insert_once_before_line "$HOME/.zshrc" '[dot-install auto-tmux-env]' 'source $ZSH/oh-my-zsh.sh' '# [dot-install auto-tmux-env]
+ZSH_TMUX_AUTOSTART=true
+ZSH_TMUX_AUTOCONNECT=false
+ZSH_TMUX_AUTOQUIT=false'
+}
+
+append_proxy_helpers() {
+  append_once "$HOME/.zshrc" '[dot-install proxy]' '# [dot-install proxy]
+setp() {
+    local proxy_host="127.0.0.1"
+    local proxy_port="12334"
+    export HTTP_PROXY="http://${proxy_host}:${proxy_port}"
+    export HTTPS_PROXY="http://${proxy_host}:${proxy_port}"
+    export FTP_PROXY="http://${proxy_host}:${proxy_port}"
+    export ALL_PROXY="socks5://${proxy_host}:${proxy_port}"
+}
+
+unsetp() {
+    unset HTTP_PROXY HTTPS_PROXY FTP_PROXY ALL_PROXY
+}'
 }
 
 install_zsh_stack() {
@@ -193,12 +260,14 @@ install_zsh_stack() {
   ensure_git_repo https://github.com/romkatv/powerlevel10k.git "$c/themes/powerlevel10k"
   ensure_git_repo https://github.com/zsh-users/zsh-autosuggestions "$c/plugins/zsh-autosuggestions"
   ensure_git_repo https://github.com/zsh-users/zsh-syntax-highlighting.git "$c/plugins/zsh-syntax-highlighting"
+  prepend_p10k_instant_prompt
   sync_ohmyzsh_zshrc
+  append_auto_tmux
   [[ -f "$HOME/.p10k.zsh" ]] \
     || download "https://raw.githubusercontent.com/romkatv/powerlevel10k/master/config/p10k-lean.zsh" "$HOME/.p10k.zsh"
   append_once "$HOME/.zshrc" 'source ~/.p10k.zsh' '[[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh'
-  append_once "$HOME/.zshrc" 'source ~/.fzf.zsh' '[[ -f ~/.fzf.zsh ]] && source ~/.fzf.zsh'
-  append_auto_tmux
+  append_fzf_zshrc
+  append_proxy_helpers
   ok "zsh"
 }
 
